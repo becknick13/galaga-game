@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scary Galaga-like Game with Sound</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+      font-family: sans-serif;
+    }
+    canvas {
+      background: #000;
+      border: 2px solid white;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="480" height="640"></canvas>
+  <script>
+    // Get canvas and context
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Load sound files (ensure these files are in the same directory as this HTML file)
+    const enemyShotSound = new Audio('enemyShot.mp3');
+    const enemyMoveSound = new Audio('enemyMove.mp3');
+
+    // Game state variables
+    let score = 0;
+    let level = 1;
+    let gameRunning = true;
+
+    // Player object with lives
+    const player = {
+      x: canvas.width / 2 - 15,
+      y: canvas.height - 50,
+      width: 30,
+      height: 30,
+      speed: 5,
+      dx: 0,
+      lives: 3
+    };
+
+    // Arrays for bullets (player and enemy)
+    let bullets = [];
+    let enemyBullets = [];
+    // Formation and diving enemies
+    let formationEnemies = [];
+    let divingEnemies = [];
+    // Global formation speed
+    let enemyFormationSpeed = 1;
+    // Flag to allow one bullet per key press
+    let canFire = true;
+    // Object to track current key states
+    let keysPressed = {};
+    // Toggle to alternate between dropping one enemy and a pair
+    let dropPairNext = false;
+
+    // Create enemy wave (formation)
+    function createEnemies() {
+      formationEnemies = [];
+      const rows = 5;
+      const cols = 8;
+      const enemyWidth = 30;
+      const enemyHeight = 30;
+      const padding = 20;
+      const offsetTop = 30;
+      const offsetLeft = 30;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const enemyX = c * (enemyWidth + padding) + offsetLeft;
+          const enemyY = r * (enemyHeight + padding) + offsetTop;
+          formationEnemies.push({
+            x: enemyX,
+            y: enemyY,
+            width: enemyWidth,
+            height: enemyHeight
+          });
+        }
+      }
+    }
+    createEnemies();
+
+    // ----------------- Drawing Functions -----------------
+
+    // Draw the player's ship as a triangular fighter (Galaga‑like)
+    function drawPlayer() {
+      ctx.fillStyle = "lime";
+      ctx.beginPath();
+      ctx.moveTo(player.x, player.y + player.height);
+      ctx.lineTo(player.x + player.width / 2, player.y);
+      ctx.lineTo(player.x + player.width, player.y + player.height);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Draw player's bullet as a small cyan rectangle
+    function drawBullets() {
+      ctx.fillStyle = "cyan";
+      bullets.forEach(bullet => {
+        ctx.beginPath();
+        ctx.rect(bullet.x, bullet.y, bullet.width, bullet.height);
+        ctx.fill();
+      });
+    }
+
+    // Draw formation aliens with a more realistic, scary look.
+    function drawFormationEnemies() {
+      formationEnemies.forEach(enemy => {
+        ctx.fillStyle = "darkred";
+        ctx.beginPath();
+        // Draw an alien head with irregular curves using bezier curves.
+        ctx.moveTo(enemy.x + enemy.width/2, enemy.y);
+        ctx.bezierCurveTo(enemy.x, enemy.y + enemy.height/4, enemy.x, enemy.y + 3*enemy.height/4, enemy.x + enemy.width/2, enemy.y + enemy.height);
+        ctx.bezierCurveTo(enemy.x + enemy.width, enemy.y + 3*enemy.height/4, enemy.x + enemy.width, enemy.y + enemy.height/4, enemy.x + enemy.width/2, enemy.y);
+        ctx.closePath();
+        ctx.fill();
+        
+        // Draw sinister eyes.
+        ctx.fillStyle = "black";
+        ctx.beginPath();
+        ctx.arc(enemy.x + enemy.width/3, enemy.y + enemy.height/2.5, enemy.width/10, 0, Math.PI*2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(enemy.x + 2*enemy.width/3, enemy.y + enemy.height/2.5, enemy.width/10, 0, Math.PI*2);
+        ctx.fill();
+      });
+    }
+
+    // Draw diving aliens as saucer-like ships with a glowing eye and antenna.
+    function drawDivingEnemies() {
+      divingEnemies.forEach(enemy => {
+        ctx.fillStyle = "darkpurple";
+        ctx.beginPath();
+        ctx.ellipse(enemy.x + enemy.width/2, enemy.y + enemy.height/2, enemy.width/2, enemy.height/3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.fillStyle = "red";
+        ctx.beginPath();
+        ctx.arc(enemy.x + enemy.width/2, enemy.y + enemy.height/2, enemy.width/10, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.strokeStyle = "black";
+        ctx.beginPath();
+        ctx.moveTo(enemy.x + enemy.width/2, enemy.y + enemy.height/2 - enemy.height/3);
+        ctx.lineTo(enemy.x + enemy.width/2, enemy.y);
+        ctx.stroke();
+      });
+    }
+
+    // Draw enemy bullets as small purple rectangles.
+    function drawEnemyBullets() {
+      ctx.fillStyle = "purple";
+      enemyBullets.forEach(bullet => {
+        ctx.beginPath();
+        ctx.rect(bullet.x, bullet.y, bullet.width, bullet.height);
+        ctx.fill();
+      });
+    }
+
+    // Draw the HUD (score, lives, and level)
+    function drawHUD() {
+      ctx.fillStyle = 'white';
+      ctx.font = '16px Arial';
+      ctx.fillText("Score: " + score, 8, 20);
+      ctx.fillText("Lives: " + player.lives, canvas.width - 80, 20);
+      ctx.fillText("Level: " + level, canvas.width / 2 - 30, 20);
+    }
+
+    // ----------------- Update Functions -----------------
+
+    function updatePlayer() {
+      player.x += player.dx;
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.width > canvas.width)
+        player.x = canvas.width - player.width;
+    }
+
+    function updateBullets() {
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        bullets[i].y -= bullets[i].speed;
+        if (bullets[i].y < 0) {
+          bullets.splice(i, 1);
+        }
+      }
+    }
+
+    function updateEnemyBullets() {
+      for (let i = enemyBullets.length - 1; i >= 0; i--) {
+        enemyBullets[i].y += enemyBullets[i].speed;
+        if (rectsIntersect(enemyBullets[i], player)) {
+          enemyBullets.splice(i, 1);
+          player.lives--;
+          if (player.lives <= 0) {
+            gameOver();
+            return;
+          }
+        } else if (enemyBullets[i].y > canvas.height) {
+          enemyBullets.splice(i, 1);
+        }
+      }
+    }
+
+    // Update formation enemy movement.
+    // Plays a "move" sound when the formation reverses direction.
+    function updateFormationEnemies() {
+      if (formationEnemies.length === 0) return;
+      let leftMost = Infinity;
+      let rightMost = -Infinity;
+      formationEnemies.forEach(enemy => {
+        if (enemy.x < leftMost) leftMost = enemy.x;
+        if (enemy.x + enemy.width > rightMost)
+          rightMost = enemy.x + enemy.width;
+      });
+      if (leftMost + enemyFormationSpeed < 0 || rightMost + enemyFormationSpeed > canvas.width) {
+        enemyFormationSpeed *= -1;
+        formationEnemies.forEach(enemy => {
+          enemy.y += 10;
+        });
+        enemyMoveSound.play(); // Play move sound on reversal
+      }
+      formationEnemies.forEach(enemy => {
+        enemy.x += enemyFormationSpeed;
+      });
+      maybeDropEnemy();
+      formationEnemies.forEach(enemy => {
+        if (enemy.y + enemy.height >= player.y) {
+          gameOver();
+        }
+      });
+    }
+
+    // Randomly drop one enemy or a pair from the formation, alternating between them.
+    function maybeDropEnemy() {
+      // Increase drop probability to see drops more often.
+      if (formationEnemies.length > 0 && divingEnemies.length < 3 && Math.random() < 0.005) {
+        if (dropPairNext && formationEnemies.length >= 2) {
+          let index1 = Math.floor(Math.random() * formationEnemies.length);
+          let enemy1 = formationEnemies.splice(index1, 1)[0];
+          let index2 = Math.floor(Math.random() * formationEnemies.length);
+          let enemy2 = formationEnemies.splice(index2, 1)[0];
+          enemy1.dx = Math.random() * 2 - 1;
+          enemy1.dy = 3;
+          enemy2.dx = Math.random() * 2 - 1;
+          enemy2.dy = 3;
+          divingEnemies.push(enemy1, enemy2);
+        } else {
+          let index = Math.floor(Math.random() * formationEnemies.length);
+          let enemy = formationEnemies.splice(index, 1)[0];
+          enemy.dx = Math.random() * 2 - 1;
+          enemy.dy = 3;
+          divingEnemies.push(enemy);
+        }
+        dropPairNext = !dropPairNext;
+      }
+    }
+
+    // Update diving enemies (those that have broken off)
+    function updateDivingEnemies() {
+      for (let i = divingEnemies.length - 1; i >= 0; i--) {
+        let enemy = divingEnemies[i];
+        enemy.x += enemy.dx;
+        enemy.y += enemy.dy;
+        if (rectsIntersect(enemy, player)) {
+          divingEnemies.splice(i, 1);
+          player.lives--;
+          if (player.lives <= 0) {
+            gameOver();
+            return;
+          }
+        } else if (enemy.y > canvas.height) {
+          divingEnemies.splice(i, 1);
+        }
+      }
+    }
+
+    // Random enemy firing: select a random enemy and fire a bullet.
+    function enemyFire() {
+      if (Math.random() < 0.005) {
+        const allEnemies = formationEnemies.concat(divingEnemies);
+        if (allEnemies.length > 0) {
+          const shooter = allEnemies[Math.floor(Math.random() * allEnemies.length)];
+          enemyBullets.push({
+            x: shooter.x + shooter.width / 2 - 2.5,
+            y: shooter.y + shooter.height,
+            width: 5,
+            height: 10,
+            speed: 4
+          });
+        }
+      }
+    }
+
+    // Axis-aligned bounding box collision detection.
+    function rectsIntersect(a, b) {
+      return (
+        a.x < b.x + b.width &&
+        a.x + a.width > b.x &&
+        a.y < b.y + b.height &&
+        a.y + a.height > b.y
+      );
+    }
+
+    // Check collisions between player bullets and enemies.
+    // Play the enemy shot sound when an enemy is hit.
+    function detectCollisions() {
+      // Formation enemies
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        for (let j = formationEnemies.length - 1; j >= 0; j--) {
+          if (rectsIntersect(bullets[i], formationEnemies[j])) {
+            bullets.splice(i, 1);
+            formationEnemies.splice(j, 1);
+            score += 10;
+            enemyShotSound.play();
+            break;
+          }
+        }
+      }
+      // Diving enemies
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        for (let j = divingEnemies.length - 1; j >= 0; j--) {
+          if (rectsIntersect(bullets[i], divingEnemies[j])) {
+            bullets.splice(i, 1);
+            divingEnemies.splice(j, 1);
+            score += 20;
+            enemyShotSound.play();
+            break;
+          }
+        }
+      }
+    }
+
+    // Check if both formation and diving enemies are cleared to move to the next level.
+    function checkWaveClear() {
+      if (formationEnemies.length === 0 && divingEnemies.length === 0) {
+        level++;
+        enemyFormationSpeed = (enemyFormationSpeed > 0 ? 1 : -1) * (1 + level * 0.2);
+        createEnemies();
+      }
+    }
+
+    // End-of-game function.
+    function gameOver() {
+      gameRunning = false;
+      alert("Game Over! Your score: " + score);
+      document.location.reload();
+    }
+
+    // ----------------- Main Game Loop -----------------
+
+    function update() {
+      if (!gameRunning) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Update player's dx based on current key states.
+      if (keysPressed["ArrowRight"] && !keysPressed["ArrowLeft"]) {
+        player.dx = player.speed;
+      } else if (keysPressed["ArrowLeft"] && !keysPressed["ArrowRight"]) {
+        player.dx = -player.speed;
+      } else {
+        player.dx = 0;
+      }
+      
+      updatePlayer();
+      updateBullets();
+      updateEnemyBullets();
+      updateFormationEnemies();
+      updateDivingEnemies();
+      enemyFire();
+      detectCollisions();
+      checkWaveClear();
+      drawPlayer();
+      drawBullets();
+      drawFormationEnemies();
+      drawDivingEnemies();
+      drawEnemyBullets();
+      drawHUD();
+      requestAnimationFrame(update);
+    }
+
+    // ----------------- Keyboard Controls -----------------
+
+    document.addEventListener('keydown', e => {
+      keysPressed[e.code] = true;
+      if (e.code === "Space" && canFire) {
+        bullets.push({
+          x: player.x + player.width / 2 - 2.5,
+          y: player.y,
+          width: 5,
+          height: 10,
+          speed: 7
+        });
+        canFire = false;
+      }
+    });
+
+    document.addEventListener('keyup', e => {
+      keysPressed[e.code] = false;
+      if (e.code === "Space") {
+        canFire = true;
+      }
+    });
+
+    update();
+  </script>
+</body>
+</html>
